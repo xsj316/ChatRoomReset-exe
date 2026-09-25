@@ -1,0 +1,186 @@
+<Page
+    x:Class="ChatRoomReset.Pages.ChatPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="using:ChatRoomReset.Pages"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <local:BoolToVisConverter x:Key="BoolToVis"/>
+        <!-- 我的消息气泡 -->
+        <DataTemplate x:Key="MyMsgTemplate">
+            <Grid HorizontalAlignment="Right" MaxWidth="540" Margin="0,4">
+                <StackPanel>
+                    <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="12,12,2,12" Padding="12,8">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Content}" Foreground="White" TextWrapping="Wrap"
+                                       Visibility="{Binding ShowContent, Converter={StaticResource BoolToVis}}"/>
+                            <Button Content="{Binding FileLabel}" Tag="{Binding}" Click="FileCard_Click"
+                                    Background="{ThemeResource SystemFillColorSuccessBrush}" Foreground="White"
+                                    HorizontalAlignment="Left" Padding="8,4" CornerRadius="6"
+                                    Visibility="{Binding ShowFile, Converter={StaticResource BoolToVis}}"/>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="{Binding TimeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Right" Margin="0,2,4,0"/>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 对方消息气泡 -->
+        <DataTemplate x:Key="TheirMsgTemplate">
+            <Grid HorizontalAlignment="Left" MaxWidth="540" Margin="0,4">
+                <StackPanel>
+                    <TextBlock Text="{Binding FromName}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="4,0,0,2"
+                               Visibility="{Binding ShowSender, Converter={StaticResource BoolToVis}}"/>
+                    <Border Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="12,12,12,2" Padding="12,8">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Content}" TextWrapping="Wrap"
+                                       Visibility="{Binding ShowContent, Converter={StaticResource BoolToVis}}"/>
+                            <Button Content="{Binding FileLabel}" Tag="{Binding}" Click="FileCard_Click"
+                                    Background="{ThemeResource AccentFillColorSecondaryBrush}"
+                                    HorizontalAlignment="Left" Padding="8,4" CornerRadius="6"
+                                    Visibility="{Binding ShowFile, Converter={StaticResource BoolToVis}}"/>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="{Binding TimeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Left" Margin="4,2,0,0"/>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 群成员模板选择器：根据 IsMine 切换气泡 -->
+        <local:ChatMessageTemplateSelector x:Key="MsgSelector"
+            MyTemplate="{StaticResource MyMsgTemplate}"
+            TheirTemplate="{StaticResource TheirMsgTemplate}"/>
+
+        <!-- 群友面板成员项模板：头像（无头像用首字母占位）+ 名称 + 在线状态 + 群内角色 -->
+        <DataTemplate x:Key="MemberTemplate">
+            <Grid Padding="8,6" ColumnSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 头像：点击发起好友申请 -->
+                <Button Grid.Column="0" Tapped="MemberAvatar_Click" Tag="{Binding}" Background="Transparent"
+                        BorderThickness="0" Padding="0" VerticalAlignment="Center"
+                        ToolTipService.ToolTip="点击头像发起好友申请">
+                    <Grid Width="40" Height="40">
+                        <Ellipse Fill="{ThemeResource ControlFillColorSecondaryBrush}"/>
+                        <Image Source="{Binding Avatar}" Width="40" Height="40"
+                               Visibility="{Binding HasAvatar, Converter={StaticResource BoolToVis}}"/>
+                        <TextBlock Text="{Binding Initial}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="{Binding HasAvatar, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"/>
+                    </Grid>
+                </Button>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Username}" FontSize="15" FontWeight="SemiBold" MaxWidth="130" TextTrimming="CharacterEllipsis"/>
+                        <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="5,1" VerticalAlignment="Center"
+                                Visibility="{Binding IsOwner, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="群主" FontSize="10" Foreground="White"/>
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <Ellipse Width="8" Height="8" Fill="{Binding OnlineBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock Grid.Column="2" Text="{Binding SelfTag}" FontSize="11"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center"/>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部栏 -->
+        <Grid Grid.Row="0" Grid.Column="0" Padding="12,10" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="0" Click="Back_Click" Padding="6" Background="Transparent" BorderThickness="0">
+                <FontIcon Glyph="&#xE72B;" FontSize="16"/>
+            </Button>
+            <TextBlock x:Name="TitleText" Grid.Column="1" Text="" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+
+            <Button Grid.Column="2" Click="More_Click" Padding="6" Background="Transparent" BorderThickness="0">
+                <FontIcon Glyph="&#xE712;" FontSize="16"/>
+            </Button>
+        </Grid>
+
+        <!-- 消息列表 -->
+        <ListView x:Name="MsgList" Grid.Row="1" Grid.Column="0" SelectionMode="None" ItemTemplateSelector="{StaticResource MsgSelector}"
+                  Padding="12,8" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+
+        <!-- 底部输入区 -->
+        <Grid Grid.Row="2" Grid.Column="0" Padding="12,8" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="0" Click="Attach_Click" Padding="6" Background="Transparent" BorderThickness="0"
+                    ToolTipService.ToolTip="发送附件（不限大小）">
+                <FontIcon Glyph="&#xE8B7;" FontSize="18"/>
+            </Button>
+            <TextBox x:Name="InputBox" Grid.Column="1" PlaceholderText="输入消息..." MinHeight="34" KeyDown="InputBox_KeyDown"/>
+            <Button x:Name="SendBtn" Grid.Column="2" Content="发送" Style="{StaticResource AccentButtonStyle}" Click="SendBtn_Click" MinWidth="72"/>
+        </Grid>
+
+        <!-- 右侧群友面板（群聊时通过三点菜单显示/收起） -->
+        <Border x:Name="MemberPanel" Grid.Column="1" Grid.RowSpan="3" Width="260" Visibility="Collapsed"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="1,0,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 面板头部 -->
+                <Grid Grid.Row="0" Padding="16,14" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock x:Name="MemberPanelTitle" Text="群成员" FontSize="16" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="MemberCountText" Text="" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Click="CollapseMemberPanel_Click" Padding="6" Background="Transparent" BorderThickness="0"
+                            ToolTipService.ToolTip="收起群友面板">
+                        <FontIcon Glyph="&#xE76B;" FontSize="14"/>
+                    </Button>
+                </Grid>
+
+                <!-- 成员列表 -->
+                <ListView x:Name="MemberList" Grid.Row="1" SelectionMode="None" ItemTemplate="{StaticResource MemberTemplate}"
+                          Padding="4,8" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+
+                <!-- 底部提示 -->
+                <TextBlock Grid.Row="2" Text="点击头像可发起好友申请" FontSize="11"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="16,0,0,12"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Page>

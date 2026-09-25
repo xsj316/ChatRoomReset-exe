@@ -1,0 +1,58 @@
+<Page
+    x:Class="ChatRoomReset.Pages.GroupsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部操作区 -->
+        <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <TextBlock Text="群聊" FontSize="26" FontWeight="Bold" VerticalAlignment="Center"/>
+                <Button x:Name="CreateGroupBtn" Content="创建群" Click="CreateGroupBtn_Click" VerticalAlignment="Center"/>
+                <Button x:Name="JoinGroupBtn" Content="加入群" Click="JoinGroupBtn_Click" VerticalAlignment="Center"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- 群列表 -->
+        <Grid Grid.Row="1">
+            <ListView x:Name="GroupList" SelectionMode="None" IsItemClickEnabled="True" ItemClick="GroupList_ItemClick">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnSpacing="12" Padding="4,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Width="44" Height="44" CornerRadius="22" Background="{ThemeResource AccentFillColorDefaultBrush}">
+                                <TextBlock Text="{Binding Initial}" Foreground="White" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold"/>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{Binding OwnerName}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Text="群号 " FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <TextBlock Text="{Binding InviteCode}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <FontIcon Grid.Column="2" Glyph="&#xE716;" FontSize="16" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+
+            <StackPanel x:Name="EmptyPanel" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Visibility="Collapsed">
+                <TextBlock Text="还没有加入任何群" FontSize="18" HorizontalAlignment="Center"/>
+                <TextBlock Text="点击上方“创建群”或“加入群”开始群聊" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Page>

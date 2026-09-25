@@ -1,0 +1,85 @@
+<Page
+    x:Class="ChatRoomReset.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="16" Padding="24,16,24,24" MaxWidth="720" HorizontalAlignment="Left">
+
+            <!-- 用户卡片 -->
+            <Border CornerRadius="12" Padding="20" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <Border Width="64" Height="64" CornerRadius="32" Background="{ThemeResource AccentFillColorDefaultBrush}">
+                        <TextBlock x:Name="AvatarText" Text="" FontSize="26" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel VerticalAlignment="Center" Spacing="4">
+                        <TextBlock x:Name="UsernameText" FontSize="22" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="PointsText" FontSize="15" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="RoleText" FontSize="13" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- 签到区域 -->
+            <Border CornerRadius="12" Padding="20" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="每日签到" FontSize="18" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="SignStatusText" Text="今日尚未签到" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <Button x:Name="SignBtn" Content="立即签到 +10 积分" Style="{StaticResource AccentButtonStyle}" Click="SignBtn_Click" HorizontalAlignment="Left"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 管理员：生成兑换码 -->
+            <Border x:Name="AdminPanel" CornerRadius="12" Padding="20" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="生成兑换码（对话码）" FontSize="18" FontWeight="SemiBold"/>
+                    <TextBlock Text="生成后复制给用户，在设置页兑换积分。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13"/>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <NumberBox x:Name="CodeAmountBox" Header="积分额度" Minimum="1" Maximum="1000000" Value="100" SpinButtonPlacementMode="Compact" Width="160"/>
+                        <NumberBox x:Name="CodeCountBox" Header="生成数量" Minimum="1" Maximum="100" Value="1" SpinButtonPlacementMode="Compact" Width="140"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="GenerateBtn" Content="生成" Click="GenerateBtn_Click" HorizontalAlignment="Left"/>
+                        <TextBlock x:Name="GenResultText" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <ListView x:Name="CodeList" MaxHeight="260" SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <TextBlock Text="{Binding Code}" FontFamily="Consolas" FontSize="14"/>
+                                    <TextBlock Text="{Binding StatusText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </Border>
+
+            <!-- 积分流水 -->
+            <Border CornerRadius="12" Padding="20" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="积分流水" FontSize="18" FontWeight="SemiBold"/>
+                    <ListView x:Name="TxnList" MaxHeight="300" SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding TypeLabel}" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Note}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding AmountText}" FontWeight="Bold"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>
