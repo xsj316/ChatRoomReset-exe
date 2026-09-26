@@ -21,6 +21,10 @@ public class FriendItem
     public string Initial => string.IsNullOrEmpty(Username) ? "?" : Username.Substring(0, 1).ToUpper();
     public string StatusText { get; set; } = "离线";
     public Brush StatusColor { get; set; } = new SolidColorBrush(Microsoft.UI.Colors.Gray);
+    // 未读角标
+    public int Unread { get; set; }
+    public string UnreadText => Unread > 0 ? (Unread > 99 ? "99+" : Unread.ToString()) : "";
+    public Visibility UnreadVisible => Unread > 0 ? Visibility.Visible : Visibility.Collapsed;
 }
 
 public sealed partial class FriendsPage : Page
@@ -40,6 +44,8 @@ public sealed partial class FriendsPage : Page
         base.OnNavigatedTo(e);
         App.Socket.FriendOnlineChanged -= Socket_FriendOnlineChanged;
         App.Socket.FriendOnlineChanged += Socket_FriendOnlineChanged;
+        App.Socket.PrivateMessageReceived -= Socket_PrivateMessageReceived;
+        App.Socket.PrivateMessageReceived += Socket_PrivateMessageReceived;
         _ = LoadFriendsAsync();
     }
 
@@ -47,6 +53,13 @@ public sealed partial class FriendsPage : Page
     {
         base.OnNavigatedFrom(e);
         App.Socket.FriendOnlineChanged -= Socket_FriendOnlineChanged;
+        App.Socket.PrivateMessageReceived -= Socket_PrivateMessageReceived;
+    }
+
+    private void Socket_PrivateMessageReceived(int fromId, string content, long fileId, long msgId, int replyTo)
+    {
+        // 收到新私聊消息 → 刷新未读角标
+        DispatcherQueue.TryEnqueue(() => _ = LoadUnreadAsync());
     }
 
     private void Socket_FriendOnlineChanged(int userId, bool online)
@@ -88,6 +101,28 @@ public sealed partial class FriendsPage : Page
                 Friends.Add(f);
             }
             EmptyPanel.Visibility = Friends.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        catch { }
+        await LoadUnreadAsync();
+    }
+
+    /// <summary>拉取私聊未读数，写入好友角标。</summary>
+    private async Task LoadUnreadAsync()
+    {
+        try
+        {
+            var res = await _api.GetAsync("/messages/unread");
+            var unreads = new Dictionary<int, int>();
+            foreach (var r in res.GetProperty("private").EnumerateArray())
+            {
+                var peerId = r.GetProperty("userId").GetInt32();
+                var n = r.GetProperty("unread").GetInt32();
+                unreads[peerId] = n;
+            }
+            foreach (var f in Friends)
+            {
+                f.Unread = unreads.TryGetValue(f.Id, out var n) ? n : 0;
+            }
         }
         catch { }
     }

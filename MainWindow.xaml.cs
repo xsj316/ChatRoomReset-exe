@@ -19,11 +19,16 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         Current = this;
 
-        // 应用启动时应用保存的主题
+        // 应用启动时应用保存的主题（浅色/深色/跟随系统）
         var theme = SettingsService.Instance.Theme;
         if (this.Content is FrameworkElement root)
         {
-            root.RequestedTheme = theme == "Dark" ? ElementTheme.Dark : ElementTheme.Light;
+            root.RequestedTheme = theme switch
+            {
+                "Dark" => ElementTheme.Dark,
+                "Light" => ElementTheme.Light,
+                _ => ElementTheme.Default   // 跟随系统
+            };
         }
 
         // 决定起始页

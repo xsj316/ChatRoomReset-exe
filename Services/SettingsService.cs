@@ -13,7 +13,8 @@ public class SettingsService
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "settings.json");
 
     public string ServerBase { get; set; } = "http://localhost:3000";
-    public string Theme { get; set; } = "Light";   // Light / Dark
+    public string Theme { get; set; } = "System";  // Light / Dark / System（跟随系统）
+    public bool AutoUpdate { get; set; } = true;   // 启动时静默检查新版本
     public string? Token { get; set; }
     public UserInfo? Me { get; set; }
 

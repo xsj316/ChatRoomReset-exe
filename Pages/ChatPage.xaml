@@ -12,18 +12,34 @@
         <!-- 我的消息气泡 -->
         <DataTemplate x:Key="MyMsgTemplate">
             <Grid HorizontalAlignment="Right" MaxWidth="540" Margin="0,4">
+                <Grid.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="引用回复" Click="MsgMenu_Reply_Click" Tag="{Binding}"/>
+                        <MenuFlyoutItem Text="撤回" Click="MsgMenu_Recall_Click" Tag="{Binding}"/>
+                        <MenuFlyoutItem Text="删除" Click="MsgMenu_Delete_Click" Tag="{Binding}"/>
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
                 <StackPanel>
                     <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="12,12,2,12" Padding="12,8">
                         <StackPanel>
+                            <Border Background="#33FFFFFF" CornerRadius="6" Padding="8,4" Margin="0,0,0,6" Visibility="{Binding ShowReply, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{Binding ReplyContent}" Foreground="White" FontSize="12" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                            </Border>
                             <TextBlock Text="{Binding Content}" Foreground="White" TextWrapping="Wrap"
                                        Visibility="{Binding ShowContent, Converter={StaticResource BoolToVis}}"/>
+                            <TextBlock Text="{Binding PlaceholderText}" Foreground="White" FontSize="13" TextWrapping="Wrap"
+                                       Visibility="{Binding ShowPlaceholder, Converter={StaticResource BoolToVis}}"/>
                             <Button Content="{Binding FileLabel}" Tag="{Binding}" Click="FileCard_Click"
                                     Background="{ThemeResource SystemFillColorSuccessBrush}" Foreground="White"
                                     HorizontalAlignment="Left" Padding="8,4" CornerRadius="6"
                                     Visibility="{Binding ShowFile, Converter={StaticResource BoolToVis}}"/>
                         </StackPanel>
                     </Border>
-                    <TextBlock Text="{Binding TimeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Right" Margin="0,2,4,0"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6" Margin="0,2,4,0">
+                        <TextBlock Text="已读" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="{Binding ShowRead, Converter={StaticResource BoolToVis}}"/>
+                        <TextBlock Text="{Binding TimeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </DataTemplate>
@@ -31,13 +47,30 @@
         <!-- 对方消息气泡 -->
         <DataTemplate x:Key="TheirMsgTemplate">
             <Grid HorizontalAlignment="Left" MaxWidth="540" Margin="0,4">
+                <Grid.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="引用回复" Click="MsgMenu_Reply_Click" Tag="{Binding}"/>
+                        <MenuFlyoutItem Text="删除" Click="MsgMenu_Delete_Click" Tag="{Binding}"/>
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
                 <StackPanel>
-                    <TextBlock Text="{Binding FromName}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="4,0,0,2"
-                               Visibility="{Binding ShowSender, Converter={StaticResource BoolToVis}}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="6" Margin="4,0,0,2">
+                        <TextBlock Text="{Binding FromName}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Visibility="{Binding ShowSender, Converter={StaticResource BoolToVis}}"/>
+                        <Border Background="{ThemeResource SystemFillColorCautionBrush}" CornerRadius="4" Padding="5,1"
+                                Visibility="{Binding ShowMentioned, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="@我" FontSize="10" Foreground="White"/>
+                        </Border>
+                    </StackPanel>
                     <Border Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="12,12,12,2" Padding="12,8">
                         <StackPanel>
+                            <Border Background="{ThemeResource ControlFillColorSecondaryBrush}" CornerRadius="6" Padding="8,4" Margin="0,0,0,6" Visibility="{Binding ShowReply, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{Binding ReplyContent}" FontSize="12" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                            </Border>
                             <TextBlock Text="{Binding Content}" TextWrapping="Wrap"
                                        Visibility="{Binding ShowContent, Converter={StaticResource BoolToVis}}"/>
+                            <TextBlock Text="{Binding PlaceholderText}" FontSize="13" TextWrapping="Wrap"
+                                       Visibility="{Binding ShowPlaceholder, Converter={StaticResource BoolToVis}}"/>
                             <Button Content="{Binding FileLabel}" Tag="{Binding}" Click="FileCard_Click"
                                     Background="{ThemeResource AccentFillColorSecondaryBrush}"
                                     HorizontalAlignment="Left" Padding="8,4" CornerRadius="6"
@@ -91,8 +124,24 @@
                     </StackPanel>
                 </StackPanel>
 
-                <TextBlock Grid.Column="2" Text="{Binding SelfTag}" FontSize="11"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding SelfTag}" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center"/>
+                    <!-- 群主管理菜单：禁言 / 解除禁言 / 移出群聊 -->
+                    <Button Padding="4" Background="Transparent" BorderThickness="0"
+                            Visibility="{Binding ManageVisible, Converter={StaticResource BoolToVis}}"
+                            ToolTipService.ToolTip="群管理">
+                        <FontIcon Glyph="&#xE712;" FontSize="14"/>
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="禁言…" Click="MemberMute_Click" Tag="{Binding}"/>
+                                <MenuFlyoutItem Text="解除禁言" Click="MemberUnmute_Click" Tag="{Binding}"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="移出群聊" Click="MemberKick_Click" Tag="{Binding}"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
             </Grid>
         </DataTemplate>
     </Page.Resources>
@@ -104,7 +153,9 @@
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
@@ -119,35 +170,97 @@
             <Button Grid.Column="0" Click="Back_Click" Padding="6" Background="Transparent" BorderThickness="0">
                 <FontIcon Glyph="&#xE72B;" FontSize="16"/>
             </Button>
-            <TextBlock x:Name="TitleText" Grid.Column="1" Text="" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                <TextBlock x:Name="TitleText" Text="" FontSize="20" FontWeight="SemiBold"/>
+                <TextBlock x:Name="TypingText" Text="正在输入…" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Visibility="Collapsed"/>
+            </StackPanel>
 
-            <Button Grid.Column="2" Click="More_Click" Padding="6" Background="Transparent" BorderThickness="0">
-                <FontIcon Glyph="&#xE712;" FontSize="16"/>
-            </Button>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
+                <Button Click="Search_Click" Padding="6" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="搜索聊天记录">
+                    <FontIcon Glyph="&#xE721;" FontSize="16"/>
+                </Button>
+                <Button Click="More_Click" Padding="6" Background="Transparent" BorderThickness="0">
+                    <FontIcon Glyph="&#xE712;" FontSize="16"/>
+                </Button>
+            </StackPanel>
         </Grid>
 
+        <!-- 群公告横幅 -->
+        <Border x:Name="AnnouncementBar" Grid.Row="1" Grid.Column="0" Visibility="Collapsed" Padding="12,6"
+                Background="{ThemeResource SystemFillColorCautionBrush}" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <FontIcon Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                <TextBlock x:Name="AnnouncementText" FontSize="12" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
         <!-- 消息列表 -->
-        <ListView x:Name="MsgList" Grid.Row="1" Grid.Column="0" SelectionMode="None" ItemTemplateSelector="{StaticResource MsgSelector}"
+        <ListView x:Name="MsgList" Grid.Row="2" Grid.Column="0" SelectionMode="None" ItemTemplateSelector="{StaticResource MsgSelector}"
                   Padding="12,8" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
 
+        <!-- 引用回复提示条 -->
+        <Border x:Name="ReplyHintBar" Grid.Row="3" Grid.Column="0" Visibility="Collapsed" Padding="12,6"
+                Background="{ThemeResource LayerFillColorDefaultBrush}" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ReplyHintText" Text="" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <Button Grid.Column="1" Click="CancelReply_Click" Padding="4" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="取消引用">
+                    <FontIcon Glyph="&#xE711;" FontSize="12"/>
+                </Button>
+            </Grid>
+        </Border>
+
         <!-- 底部输入区 -->
-        <Grid Grid.Row="2" Grid.Column="0" Padding="12,8" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="8">
+        <Grid Grid.Row="4" Grid.Column="0" Padding="12,8" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="8">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <Button Grid.Column="0" Click="Attach_Click" Padding="6" Background="Transparent" BorderThickness="0"
+            <Button Grid.Column="0" Padding="6" Background="Transparent" BorderThickness="0"
+                    ToolTipService.ToolTip="表情 / 贴纸">
+                <FontIcon Glyph="&#xE76F;" FontSize="18"/>
+                <Button.Flyout>
+                    <MenuFlyout x:Name="EmojiFlyout">
+                        <MenuFlyoutItem Text="😀" Click="EmojiItem_Click" Tag="😀"/>
+                        <MenuFlyoutItem Text="😂" Click="EmojiItem_Click" Tag="😂"/>
+                        <MenuFlyoutItem Text="😊" Click="EmojiItem_Click" Tag="😊"/>
+                        <MenuFlyoutItem Text="😍" Click="EmojiItem_Click" Tag="😍"/>
+                        <MenuFlyoutItem Text="😎" Click="EmojiItem_Click" Tag="😎"/>
+                        <MenuFlyoutItem Text="😭" Click="EmojiItem_Click" Tag="😭"/>
+                        <MenuFlyoutItem Text="😡" Click="EmojiItem_Click" Tag="😡"/>
+                        <MenuFlyoutItem Text="👍" Click="EmojiItem_Click" Tag="👍"/>
+                        <MenuFlyoutItem Text="👎" Click="EmojiItem_Click" Tag="👎"/>
+                        <MenuFlyoutItem Text="🙏" Click="EmojiItem_Click" Tag="🙏"/>
+                        <MenuFlyoutItem Text="👏" Click="EmojiItem_Click" Tag="👏"/>
+                        <MenuFlyoutItem Text="🎉" Click="EmojiItem_Click" Tag="🎉"/>
+                        <MenuFlyoutItem Text="❤️" Click="EmojiItem_Click" Tag="❤️"/>
+                        <MenuFlyoutItem Text="💔" Click="EmojiItem_Click" Tag="💔"/>
+                        <MenuFlyoutItem Text="✨" Click="EmojiItem_Click" Tag="✨"/>
+                        <MenuFlyoutItem Text="🔥" Click="EmojiItem_Click" Tag="🔥"/>
+                        <MenuFlyoutSeparator/>
+                        <MenuFlyoutItem Text="🎂 生日贴纸" Click="EmojiItem_Click" Tag="🎂"/>
+                        <MenuFlyoutItem Text="🚀 冲鸭贴纸" Click="EmojiItem_Click" Tag="🚀"/>
+                        <MenuFlyoutItem Text="☕ 摸鱼贴纸" Click="EmojiItem_Click" Tag="☕"/>
+                        <MenuFlyoutItem Text="🌙 晚安贴纸" Click="EmojiItem_Click" Tag="🌙"/>
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+            <Button Grid.Column="1" Click="Attach_Click" Padding="6" Background="Transparent" BorderThickness="0"
                     ToolTipService.ToolTip="发送附件（不限大小）">
                 <FontIcon Glyph="&#xE8B7;" FontSize="18"/>
             </Button>
-            <TextBox x:Name="InputBox" Grid.Column="1" PlaceholderText="输入消息..." MinHeight="34" KeyDown="InputBox_KeyDown"/>
-            <Button x:Name="SendBtn" Grid.Column="2" Content="发送" Style="{StaticResource AccentButtonStyle}" Click="SendBtn_Click" MinWidth="72"/>
+            <TextBox x:Name="InputBox" Grid.Column="2" PlaceholderText="输入消息..." MinHeight="34" KeyDown="InputBox_KeyDown" TextChanged="InputBox_TextChanged"/>
+            <Button x:Name="SendBtn" Grid.Column="3" Content="发送" Style="{StaticResource AccentButtonStyle}" Click="SendBtn_Click" MinWidth="72"/>
         </Grid>
 
         <!-- 右侧群友面板（群聊时通过三点菜单显示/收起） -->
-        <Border x:Name="MemberPanel" Grid.Column="1" Grid.RowSpan="3" Width="260" Visibility="Collapsed"
+        <Border x:Name="MemberPanel" Grid.Column="1" Grid.RowSpan="5" Width="260" Visibility="Collapsed"
                 Background="{ThemeResource LayerFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="1,0,0,0">
             <Grid>
@@ -177,9 +290,18 @@
                 <ListView x:Name="MemberList" Grid.Row="1" SelectionMode="None" ItemTemplate="{StaticResource MemberTemplate}"
                           Padding="4,8" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
 
-                <!-- 底部提示 -->
-                <TextBlock Grid.Row="2" Text="点击头像可发起好友申请" FontSize="11"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="16,0,0,12"/>
+                <!-- 底部操作区：群文件 / 公告管理 / 群管理（禁言等） -->
+                <Grid Grid.Row="2" Padding="12,10" ColumnSpacing="8" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="群文件" Click="GroupFiles_Click" MinHeight="34"/>
+                    <Button Grid.Column="1" Content="公告" Click="AnnouncementManage_Click" MinHeight="34"/>
+                    <Button Grid.Column="2" Content="群管" Click="GroupManage_Click" MinHeight="34"
+                            ToolTipService.ToolTip="全体禁言 / 解除全体禁言"/>
+                </Grid>
             </Grid>
         </Border>
     </Grid>

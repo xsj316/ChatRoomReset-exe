@@ -34,11 +34,24 @@
             <Border CornerRadius="12" Padding="20" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                 <StackPanel Spacing="12">
                     <TextBlock Text="外观" FontSize="18" FontWeight="SemiBold"/>
-                    <RadioButtons x:Name="ThemePicker" SelectedIndex="0">
+                    <RadioButtons x:Name="ThemePicker" SelectedIndex="2">
                         <x:String>浅色</x:String>
                         <x:String>深色</x:String>
+                        <x:String>跟随系统</x:String>
                     </RadioButtons>
                     <Button x:Name="SaveThemeBtn" Content="保存主题" Click="SaveThemeBtn_Click" HorizontalAlignment="Left"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 更新 -->
+            <Border CornerRadius="12" Padding="20" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="更新" FontSize="18" FontWeight="SemiBold"/>
+                    <ToggleSwitch x:Name="AutoUpdateSwitch" Header="启动时自动检查更新" OnContent="开启" OffContent="关闭" Toggled="AutoUpdateSwitch_Toggled"/>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="CheckUpdateBtn" Content="检查更新" Click="CheckUpdateBtn_Click" HorizontalAlignment="Left"/>
+                        <TextBlock x:Name="UpdateStatusText" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

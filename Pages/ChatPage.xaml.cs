@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ChatRoomReset.Services;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -30,6 +33,33 @@ public class ChatItem
     public string FileLabel { get; set; } = "";
     public bool ShowFile => FileId > 0;
     public string TimeText { get; set; } = "";
+
+    // 消息 ID 与类型（用于定位撤回/删除/已读）
+    public long MsgId { get; set; }
+    public string ClientId { get; set; } = ""; // 发送方本地标识，服务端落库后回传真实 MsgId
+    public string Type { get; set; } = "private"; // private / group
+    public int PeerId { get; set; }
+
+    // 状态：normal / recalled / deleted
+    public string Status { get; set; } = "normal";
+    public bool ShowPlaceholder => Status != "normal";
+    public string PlaceholderText => Status == "recalled" ? "撤回了一条消息" : "该消息已删除";
+
+    // 引用回复
+    public long ReplyTo { get; set; }
+    public string ReplyContent { get; set; } = "";
+    public bool ShowReply => ReplyTo > 0;
+
+    // @ 提醒
+    public bool Mentioned { get; set; }
+    public bool ShowMentioned => Mentioned;
+
+    // 已读回执（仅我方消息展示）
+    public bool Read { get; set; }
+    public bool ShowRead => IsMine && Read && Status == "normal";
+
+    // 本地发送时间（撤回 2 分钟窗口判断）
+    public DateTime SendAt { get; set; } = DateTime.Now;
 }
 
 /// <summary>群友面板成员项：头像（无头像用首字母占位）+ 名称 + 在线状态 + 群内角色。</summary>
@@ -48,6 +78,13 @@ public class GroupMemberItem
         ? new SolidColorBrush(Microsoft.UI.Colors.LimeGreen)
         : new SolidColorBrush(Microsoft.UI.Colors.Gray);
     public string SelfTag { get; set; } = "";
+
+    // 禁言截止时间（服务端返回的本地时间字符串，空=未禁言）
+    public string MutedUntil { get; set; } = "";
+    public bool MutedVisible => !string.IsNullOrEmpty(MutedUntil);
+
+    // 当前用户为群主/管理员且目标可被管理时显示管理菜单
+    public bool ManageVisible { get; set; }
 }
 
 public class ChatMessageTemplateSelector : DataTemplateSelector
@@ -67,11 +104,44 @@ public sealed partial class ChatPage : Page
     public ObservableCollection<ChatItem> Messages { get; } = new();
     public ObservableCollection<GroupMemberItem> Members { get; } = new();
 
+    // —— 全量升级状态 ——
+    private bool _loadingOlder;            // 正在加载更早消息
+    private bool _hasMore = true;          // 是否还有更早消息
+    private long _lastMsgId;               // 本地最新消息 id（重连补拉游标）
+    private long _replyTo;                 // 引用回复目标消息 id
+    private string _replyHint = "";        // 引用摘要文本
+    private DispatcherQueueTimer? _typingTimer; // 输入中 debounce 计时器
+    private DispatcherQueueTimer? _typingClearTimer; // "正在输入…" 3s 超时清除
+    private ScrollViewer? _scroll;         // 消息列表内部滚动容器（上滑分页）
+    private bool _mentionMenuOpen;          // @ 成员选择框是否打开
+    private string _currentAnnouncement = ""; // 当前群公告内容
+
     public ChatPage()
     {
         InitializeComponent();
         MsgList.ItemsSource = Messages;
         MemberList.ItemsSource = Members;
+        Loaded += (_, _) => AttachScrollViewer();
+    }
+
+    // 消息列表加载完成后挂接内部 ScrollViewer，用于上滑分页
+    private void AttachScrollViewer()
+    {
+        if (_scroll != null) return;
+        _scroll = FindScrollViewer(MsgList);
+        if (_scroll != null) _scroll.ViewChanged += MsgList_ViewChanged;
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is ScrollViewer sv) return sv;
+            var nested = FindScrollViewer(child);
+            if (nested != null) return nested;
+        }
+        return null;
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -81,19 +151,54 @@ public sealed partial class ChatPage : Page
         if (_nav == null) return;
 
         TitleText.Text = _nav.Name;
-        if (_nav.Mode == "group")
-        {
-            App.Socket.JoinGroup(_nav.Id);
-            App.Socket.GroupMessageReceived -= Socket_GroupMessage;
-            App.Socket.GroupMessageReceived += Socket_GroupMessage;
-            App.Socket.GroupMembersUpdated -= Socket_GroupMembersUpdated;
-            App.Socket.GroupMembersUpdated += Socket_GroupMembersUpdated;
-        }
-        else
-        {
-            App.Socket.PrivateMessageReceived -= Socket_PrivateMessage;
-            App.Socket.PrivateMessageReceived += Socket_PrivateMessage;
-        }
+        Messages.Clear();
+        _loadingOlder = false;
+        _hasMore = true;
+        _lastMsgId = 0;
+        _replyTo = 0;
+        _replyHint = "";
+        _typingTimer?.Stop();
+        _typingTimer = null;
+        TypingText.Visibility = Visibility.Collapsed;
+        AnnouncementBar.Visibility = Visibility.Collapsed;
+        ReplyHintBar.Visibility = Visibility.Collapsed;
+
+        // 订阅全部升级事件
+        App.Socket.PrivateMessageReceived -= Socket_PrivateMessage;
+        App.Socket.PrivateMessageReceived += Socket_PrivateMessage;
+        App.Socket.GroupMessageReceived -= Socket_GroupMessage;
+        App.Socket.GroupMessageReceived += Socket_GroupMessage;
+        App.Socket.GroupMembersUpdated -= Socket_GroupMembersUpdated;
+        App.Socket.GroupMembersUpdated += Socket_GroupMembersUpdated;
+        App.Socket.MessageRecalled -= Socket_MessageRecalled;
+        App.Socket.MessageRecalled += Socket_MessageRecalled;
+        App.Socket.MessageDeleted -= Socket_MessageDeleted;
+        App.Socket.MessageDeleted += Socket_MessageDeleted;
+        App.Socket.PrivateRead -= Socket_PrivateRead;
+        App.Socket.PrivateRead += Socket_PrivateRead;
+        App.Socket.PrivateTyping -= Socket_PrivateTyping;
+        App.Socket.PrivateTyping += Socket_PrivateTyping;
+        App.Socket.GroupMention -= Socket_GroupMention;
+        App.Socket.GroupMention += Socket_GroupMention;
+        App.Socket.GroupAnnouncementUpdated -= Socket_GroupAnnouncementUpdated;
+        App.Socket.GroupAnnouncementUpdated += Socket_GroupAnnouncementUpdated;
+        App.Socket.GroupFileUpdated -= Socket_GroupFileUpdated;
+        App.Socket.GroupFileUpdated += Socket_GroupFileUpdated;
+        App.Socket.GroupKicked -= Socket_GroupKicked;
+        App.Socket.GroupKicked += Socket_GroupKicked;
+        App.Socket.SocketError -= Socket_SocketError;
+        App.Socket.SocketError += Socket_SocketError;
+        App.Socket.Reconnected -= Socket_Reconnected;
+        App.Socket.Reconnected += Socket_Reconnected;
+        App.Socket.MessageAcked -= Socket_MessageAcked;
+        App.Socket.MessageAcked += Socket_MessageAcked;
+
+        if (_nav.Mode == "group") App.Socket.JoinGroup(_nav.Id);
+
+        // 进入会话：加载最近 50 条 + 清零未读 + 群公告
+        _ = LoadHistoryAsync(initial: true);
+        _ = ClearUnreadAsync();
+        if (_nav.Mode == "group") _ = LoadAnnouncementAsync();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -102,38 +207,78 @@ public sealed partial class ChatPage : Page
         App.Socket.PrivateMessageReceived -= Socket_PrivateMessage;
         App.Socket.GroupMessageReceived -= Socket_GroupMessage;
         App.Socket.GroupMembersUpdated -= Socket_GroupMembersUpdated;
+        App.Socket.MessageRecalled -= Socket_MessageRecalled;
+        App.Socket.MessageDeleted -= Socket_MessageDeleted;
+        App.Socket.PrivateRead -= Socket_PrivateRead;
+        App.Socket.PrivateTyping -= Socket_PrivateTyping;
+        App.Socket.GroupMention -= Socket_GroupMention;
+        App.Socket.GroupAnnouncementUpdated -= Socket_GroupAnnouncementUpdated;
+        App.Socket.GroupFileUpdated -= Socket_GroupFileUpdated;
+        App.Socket.GroupKicked -= Socket_GroupKicked;
+        App.Socket.SocketError -= Socket_SocketError;
+        App.Socket.Reconnected -= Socket_Reconnected;
+        App.Socket.MessageAcked -= Socket_MessageAcked;
+        _typingTimer?.Stop();
         MemberPanel.Visibility = Visibility.Collapsed;
     }
 
-    private void Socket_PrivateMessage(int fromId, string content, long fileId)
+    private void Socket_PrivateMessage(int fromId, string content, long fileId, long msgId, int replyTo)
     {
         if (_nav?.Mode != "private" || fromId != _nav.Id) return;
-        DispatcherQueue.TryEnqueue(() => AddMessage(new ChatItem
+        DispatcherQueue.TryEnqueue(() =>
         {
-            IsMine = false,
-            FromName = _nav.Name,
-            Content = content,
-            FileId = fileId,
-            FileLabel = fileId > 0 ? "收到一个文件，点击下载" : "",
-            TimeText = DateTime.Now.ToString("HH:mm")
-        }));
+            AddMessage(new ChatItem
+            {
+                IsMine = false,
+                FromName = _nav.Name,
+                Content = content,
+                FileId = fileId,
+                FileLabel = fileId > 0 ? "收到一个文件，点击下载" : "",
+                TimeText = DateTime.Now.ToString("HH:mm"),
+                MsgId = msgId,
+                Type = "private",
+                PeerId = fromId,
+                ReplyTo = replyTo,
+                ReplyContent = replyTo > 0 ? FindReplyContent(replyTo) : ""
+            });
+            if (msgId > _lastMsgId) _lastMsgId = msgId;
+        });
     }
 
-    private void Socket_GroupMessage(int groupId, int fromId, string content, long fileId)
+    private void Socket_GroupMessage(int groupId, int fromId, string content, long fileId, long msgId, int replyTo, string fromName)
     {
         if (_nav?.Mode != "group" || groupId != _nav.Id) return;
         var me = SettingsService.Instance.Me;
         if (me != null && fromId == me.Id) return; // 自己发送的由发送方本地添加
-        DispatcherQueue.TryEnqueue(() => AddMessage(new ChatItem
+        DispatcherQueue.TryEnqueue(() =>
         {
-            IsMine = false,
-            ShowSender = true,
-            FromName = $"用户{fromId}",
-            Content = content,
-            FileId = fileId,
-            FileLabel = fileId > 0 ? "收到一个文件，点击下载" : "",
-            TimeText = DateTime.Now.ToString("HH:mm")
-        }));
+            var mentioned = me != null && content.Contains("@" + me.Username, StringComparison.OrdinalIgnoreCase);
+            AddMessage(new ChatItem
+            {
+                IsMine = false,
+                ShowSender = true,
+                FromName = string.IsNullOrEmpty(fromName) ? $"用户{fromId}" : fromName,
+                Content = content,
+                FileId = fileId,
+                FileLabel = fileId > 0 ? "收到一个文件，点击下载" : "",
+                TimeText = DateTime.Now.ToString("HH:mm"),
+                MsgId = msgId,
+                Type = "group",
+                PeerId = groupId,
+                ReplyTo = replyTo,
+                ReplyContent = replyTo > 0 ? FindReplyContent(replyTo) : "",
+                Mentioned = mentioned
+            });
+            if (msgId > _lastMsgId) _lastMsgId = msgId;
+        });
+    }
+
+    // 从本地已加载消息中查找被引用消息内容
+    private string FindReplyContent(long msgId)
+    {
+        var m = Messages.FirstOrDefault(x => x.MsgId == msgId);
+        if (m == null) return "";
+        return m.Status == "normal" ? (m.Content.Length > 40 ? m.Content.Substring(0, 40) + "…" : m.Content) : m.PlaceholderText;
     }
 
     // 群成员变化（进群/退群/上下线）实时刷新面板
@@ -170,18 +315,30 @@ public sealed partial class ChatPage : Page
         var text = InputBox.Text.Trim();
         if (string.IsNullOrEmpty(text) || _nav == null) return;
 
+        var replyTo = _replyTo;   // 先保存引用目标，再清空提示条
+        var replyHint = _replyHint;
         InputBox.Text = "";
-        AddMessage(new ChatItem
+        var me = SettingsService.Instance.Me;
+        var clientId = Guid.NewGuid().ToString("N");
+        var item = new ChatItem
         {
             IsMine = true,
+            FromName = me?.Username ?? "我",
             Content = text,
-            TimeText = DateTime.Now.ToString("HH:mm")
-        });
+            TimeText = DateTime.Now.ToString("HH:mm"),
+            ClientId = clientId,
+            ReplyTo = replyTo,
+            ReplyContent = replyHint,
+            Type = _nav.Mode,
+            PeerId = _nav.Id
+        };
+        AddMessage(item);
+        CancelReply_Click(sender, e); // 清除引用提示条
 
         try
         {
-            if (_nav.Mode == "group") App.Socket.SendGroup(_nav.Id, text);
-            else App.Socket.SendPrivate(_nav.Id, text);
+            if (_nav.Mode == "group") App.Socket.SendGroup(_nav.Id, text, 0, (int)replyTo, clientId);
+            else App.Socket.SendPrivate(_nav.Id, text, 0, (int)replyTo, clientId);
         }
         catch { }
     }
@@ -206,16 +363,27 @@ public sealed partial class ChatPage : Page
             });
             var fileId = await _files.UploadAsync(file.Path, progress);
 
-            if (_nav.Mode == "group") App.Socket.SendGroup(_nav.Id, "", fileId);
-            else App.Socket.SendPrivate(_nav.Id, "", fileId);
+            var me = SettingsService.Instance.Me;
+            var clientId = Guid.NewGuid().ToString("N");
+            var replyTo = _replyTo;
+            var replyHint = _replyHint;
+
+            if (_nav.Mode == "group") App.Socket.SendGroup(_nav.Id, "", fileId, (int)replyTo, clientId);
+            else App.Socket.SendPrivate(_nav.Id, "", fileId, (int)replyTo, clientId);
 
             AddMessage(new ChatItem
             {
                 IsMine = true,
                 FileId = fileId,
                 FileLabel = "📎 " + file.Name,
-                TimeText = DateTime.Now.ToString("HH:mm")
+                TimeText = DateTime.Now.ToString("HH:mm"),
+                ClientId = clientId,
+                ReplyTo = replyTo,
+                ReplyContent = replyHint,
+                Type = _nav.Mode,
+                PeerId = _nav.Id
             });
+            CancelReply_Click(sender, e);
         }
         catch (Exception ex)
         {
@@ -319,10 +487,17 @@ public sealed partial class ChatPage : Page
                     Username = m.GetProperty("username").GetString() ?? "",
                     Avatar = m.GetProperty("avatar").GetString() ?? "",
                     Role = m.GetProperty("role").GetString() ?? "member",
-                    Online = m.TryGetProperty("online", out var o) && o.GetBoolean()
+                    Online = m.TryGetProperty("online", out var o) && o.GetBoolean(),
+                    MutedUntil = m.TryGetProperty("mutedUntil", out var mu) ? mu.GetString() ?? "" : ""
                 };
                 item.SelfTag = item.Id == meId ? "我" : "";
                 Members.Add(item);
+            }
+            // 群主（或服务端管理员）视角：非自己、非群主的成员显示管理菜单
+            var canManage = Members.Any(x => x.Id == meId && x.Role == "owner");
+            foreach (var mm in Members)
+            {
+                mm.ManageVisible = canManage && mm.Id != meId && mm.Role != "owner";
             }
             MemberCountText.Text = $"({Members.Count})";
         }
@@ -466,5 +641,840 @@ public sealed partial class ChatPage : Page
             XamlRoot = XamlRoot
         };
         await dialog.ShowAsync();
+    }
+
+    // ==================== 第二批：历史分页 ====================
+
+    private async Task LoadHistoryAsync(bool initial)
+    {
+        if (_nav == null || _loadingOlder) return;
+        _loadingOlder = true;
+        try
+        {
+            long beforeId = 0;
+            string anchorKey = "";
+            if (!initial && Messages.Count > 0)
+            {
+                beforeId = Messages[0].MsgId;
+                anchorKey = Messages[0].ClientId + "|" + Messages[0].MsgId;
+            }
+
+            var url = $"/messages/history?type={_nav.Mode}&peerId={_nav.Id}&limit=50";
+            if (beforeId > 0) url += $"&beforeId={beforeId}";
+            var res = await _api.GetAsync(url);
+            var parsed = res.GetProperty("messages").EnumerateArray()
+                .Select(x => ParseHistoryItem(x)).ToList();
+
+            if (initial)
+            {
+                Messages.Clear();
+                foreach (var m in parsed) Messages.Add(m);
+                if (Messages.Count > 0) MsgList.ScrollIntoView(Messages[Messages.Count - 1]);
+            }
+            else
+            {
+                // 插入头部（保持时间升序），并定位到加载前的锚点消息
+                for (int i = parsed.Count - 1; i >= 0; i--) Messages.Insert(0, parsed[i]);
+                var anchor = Messages.FirstOrDefault(x => (x.ClientId + "|" + x.MsgId) == anchorKey);
+                if (anchor != null) MsgList.ScrollIntoView(anchor);
+            }
+
+            if (parsed.Count < 50) _hasMore = false;
+            _lastMsgId = Messages.Count > 0 ? Messages.Max(x => x.MsgId) : _lastMsgId;
+        }
+        catch
+        {
+            // 加载失败：保留现有消息，允许用户再次上滑重试
+        }
+        finally
+        {
+            _loadingOlder = false;
+        }
+    }
+
+    private ChatItem ParseHistoryItem(JsonElement m)
+    {
+        var me = SettingsService.Instance.Me;
+        var fromId = m.TryGetProperty("fromId", out var f) ? f.GetInt32() : 0;
+        var isMine = me != null && fromId == me.Id;
+        var msgId = m.TryGetProperty("id", out var i) ? i.GetInt64() : 0;
+        var status = m.TryGetProperty("status", out var s) ? s.GetString() ?? "normal" : "normal";
+        var isDeleted = m.TryGetProperty("deleted", out var d) && d.GetInt32() == 1;
+        var content = m.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
+        var fileId = m.TryGetProperty("fileId", out var fid) ? fid.GetInt64() : 0;
+        var replyTo = m.TryGetProperty("replyTo", out var rt) ? rt.GetInt32() : 0;
+        var replyContent = m.TryGetProperty("replyContent", out var rc) ? rc.GetString() ?? "" : "";
+        var fromName = m.TryGetProperty("fromName", out var fn) ? fn.GetString() ?? "" : "";
+        var ts = m.TryGetProperty("ts", out var t) ? t.GetString() ?? "" : "";
+        var readAt = m.TryGetProperty("readAt", out var ra) ? ra.GetString() ?? "" : "";
+        var clientId = m.TryGetProperty("clientId", out var cid) ? cid.GetString() ?? "" : "";
+
+        var sendAt = DateTime.Now;
+        if (DateTime.TryParse(ts, out var dt)) sendAt = dt;
+
+        return new ChatItem
+        {
+            MsgId = msgId,
+            ClientId = clientId,
+            Type = _nav?.Mode ?? "private",
+            PeerId = _nav?.Id ?? 0,
+            IsMine = isMine,
+            FromName = string.IsNullOrEmpty(fromName)
+                ? (isMine ? (me?.Username ?? "我") : $"用户{fromId}")
+                : fromName,
+            ShowSender = !isMine && _nav?.Mode == "group",
+            Content = content,
+            FileId = fileId,
+            FileLabel = fileId > 0 ? "📎 文件，点击下载" : "",
+            TimeText = sendAt.ToString("HH:mm"),
+            SendAt = sendAt,
+            ReplyTo = replyTo,
+            ReplyContent = replyContent,
+            Read = isMine && !string.IsNullOrEmpty(readAt),
+            Status = isDeleted ? "deleted" : (status == "recalled" ? "recalled" : "normal")
+        };
+    }
+
+    // 消息列表上滑到顶：加载更早一页（游标分页）
+    private void MsgList_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (_scroll == null || _nav == null) return;
+        if (_scroll.VerticalOffset <= 2 && !_loadingOlder && _hasMore)
+            _ = LoadHistoryAsync(initial: false);
+    }
+
+    // ==================== 已读 / 未读 ====================
+
+    private async Task ClearUnreadAsync()
+    {
+        if (_nav == null) return;
+        try
+        {
+            if (_nav.Mode == "private") App.Socket.SendRead(_nav.Id);
+            await _api.PostAsync("/messages/read", new { type = _nav.Mode, peerId = _nav.Id });
+        }
+        catch { }
+    }
+
+    private void Socket_PrivateRead(int fromId, int toId)
+    {
+        if (_nav?.Mode != "private" || fromId != _nav.Id) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            foreach (var m in Messages)
+            {
+                if (m.IsMine && m.Status == "normal") m.Read = true;
+            }
+        });
+    }
+
+    // ==================== 撤回 / 删除 ====================
+
+    private void Socket_MessageRecalled(int type, int peerId, int msgId)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var m = Messages.FirstOrDefault(x => x.MsgId == msgId);
+            if (m != null) m.Status = "recalled";
+        });
+    }
+
+    private void Socket_MessageDeleted(int type, int peerId, int msgId)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var m = Messages.FirstOrDefault(x => x.MsgId == msgId);
+            if (m != null) m.Status = "deleted";
+        });
+    }
+
+    private void MsgMenu_Reply_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuFlyoutItem mi && mi.Tag is ChatItem item && item.Status == "normal")
+        {
+            _replyTo = item.MsgId;
+            _replyHint = item.Content.Length > 40 ? item.Content.Substring(0, 40) + "…" : item.Content;
+            if (string.IsNullOrEmpty(_replyHint)) _replyHint = item.FileLabel;
+            ReplyHintText.Text = $"回复：{_replyHint}";
+            ReplyHintBar.Visibility = Visibility.Visible;
+            InputBox.Focus(FocusState.Programmatic);
+        }
+    }
+
+    private async void MsgMenu_Recall_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem mi || mi.Tag is not ChatItem item) return;
+        if (item.MsgId <= 0)
+        {
+            await ShowDialogAsync("撤回失败", "消息尚未落库，请稍后重试");
+            return;
+        }
+        if (DateTime.Now - item.SendAt > TimeSpan.FromMinutes(2))
+        {
+            await ShowDialogAsync("撤回失败", "超过 2 分钟，无法撤回");
+            return;
+        }
+        try
+        {
+            await _api.PostAsync("/messages/recall", new { id = item.MsgId });
+            item.Status = "recalled";
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("撤回失败", ex.Message);
+        }
+    }
+
+    private async void MsgMenu_Delete_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem mi || mi.Tag is not ChatItem item) return;
+        if (item.MsgId <= 0)
+        {
+            await ShowDialogAsync("删除失败", "消息尚未落库，请稍后重试");
+            return;
+        }
+        try
+        {
+            await _api.PostAsync("/messages/delete", new { id = item.MsgId });
+            item.Status = "deleted";
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("删除失败", ex.Message);
+        }
+    }
+
+    private void CancelReply_Click(object sender, RoutedEventArgs e)
+    {
+        _replyTo = 0;
+        _replyHint = "";
+        ReplyHintBar.Visibility = Visibility.Collapsed;
+    }
+
+    // ==================== 表情 / 贴纸 ====================
+
+    private void EmojiItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuFlyoutItem mi && mi.Tag is string emoji)
+        {
+            var pos = InputBox.SelectionStart;
+            var text = InputBox.Text;
+            InputBox.Text = text.Substring(0, pos) + emoji + text.Substring(pos);
+            InputBox.SelectionStart = pos + emoji.Length;
+            InputBox.Focus(FocusState.Programmatic);
+            EmojiFlyout.Hide();
+        }
+    }
+
+    // ==================== 输入中状态（debounce 800ms） ====================
+
+    private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var text = InputBox.Text;
+        if (_nav == null) return;
+
+        // 群聊输入 @ 弹出成员选择
+        if (_nav.Mode == "group" && text.EndsWith("@") && !_mentionMenuOpen)
+        {
+            _ = ShowMentionPickerAsync();
+        }
+
+        if (_nav.Mode != "private") return;
+        if (string.IsNullOrEmpty(text.Trim()))
+        {
+            _typingTimer?.Stop();
+            return;
+        }
+        if (_typingTimer == null)
+        {
+            _typingTimer = DispatcherQueue.CreateTimer();
+            _typingTimer.Interval = TimeSpan.FromMilliseconds(800);
+            _typingTimer.IsRepeating = false;
+            _typingTimer.Tick += (_, _) =>
+            {
+                try { App.Socket.SendTyping(_nav!.Id); } catch { }
+            };
+        }
+        _typingTimer.Stop();
+        _typingTimer.Start();
+    }
+
+    private async Task ShowMentionPickerAsync()
+    {
+        _mentionMenuOpen = true;
+        try
+        {
+            if (_nav?.Mode != "group") return;
+            if (Members.Count == 0) await LoadMembersAsync();
+            var me = SettingsService.Instance.Me;
+            var list = new ListView
+            {
+                MaxHeight = 320,
+                SelectionMode = ListViewSelectionMode.Single,
+                ItemsSource = Members.Where(x => me == null || x.Id != me.Id).ToList()
+            };
+            list.ItemTemplate = (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+                "<DataTemplate xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">" +
+                "<TextBlock Text=\"{Binding Username}\" FontSize=\"15\" Padding=\"0,6\"/></DataTemplate>");
+            var dialog = new ContentDialog
+            {
+                Title = "选择要 @ 的成员",
+                Content = list,
+                PrimaryButtonText = "插入",
+                CloseButtonText = "取消",
+                XamlRoot = XamlRoot
+            };
+            var result = await dialog.ShowAsync();
+            if (result == ContentDialogResult.Primary && list.SelectedItem is GroupMemberItem m)
+            {
+                var text = InputBox.Text;
+                var idx = text.LastIndexOf('@');
+                if (idx >= 0)
+                {
+                    InputBox.Text = text.Substring(0, idx) + "@" + m.Username + " ";
+                    InputBox.SelectionStart = InputBox.Text.Length;
+                    InputBox.Focus(FocusState.Programmatic);
+                }
+            }
+        }
+        finally
+        {
+            _mentionMenuOpen = false;
+        }
+    }
+
+    private void Socket_PrivateTyping(int fromId)
+    {
+        if (_nav?.Mode != "private" || fromId != _nav.Id) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            TypingText.Visibility = Visibility.Visible;
+            if (_typingClearTimer == null)
+            {
+                _typingClearTimer = DispatcherQueue.CreateTimer();
+                _typingClearTimer.Interval = TimeSpan.FromSeconds(3);
+                _typingClearTimer.IsRepeating = false;
+                _typingClearTimer.Tick += (_, _) => TypingText.Visibility = Visibility.Collapsed;
+            }
+            _typingClearTimer.Stop();
+            _typingClearTimer.Start();
+        });
+    }
+
+    // ==================== @ 提醒 ====================
+
+    private void Socket_GroupMention(int groupId, int fromId, string fromName, string content)
+    {
+        // 当前正在该群会话：气泡已带 @我 徽标，不打扰
+        if (_nav != null && _nav.Mode == "group" && _nav.Id == groupId) return;
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var preview = content.Length > 50 ? content.Substring(0, 50) + "…" : content;
+            var dialog = new ContentDialog
+            {
+                Title = "有人 @ 你",
+                Content = $"{fromName} 在群聊中提到了你：\n{preview}",
+                PrimaryButtonText = "去看看",
+                CloseButtonText = "稍后",
+                XamlRoot = XamlRoot
+            };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                MainWindow.Current?.Navigate(typeof(ChatPage),
+                    new ChatNavParams { Mode = "group", Id = groupId, Name = $"群聊 {groupId}" });
+            }
+        });
+    }
+
+    // ==================== 群公告 ====================
+
+    private async Task LoadAnnouncementAsync()
+    {
+        if (_nav == null || _nav.Mode != "group") return;
+        try
+        {
+            var res = await _api.GetAsync($"/groups/{_nav.Id}/announcement");
+            var has = res.TryGetProperty("announcement", out var a)
+                && a.ValueKind == System.Text.Json.JsonValueKind.Object;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (has)
+                {
+                    var content = a.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
+                    AnnouncementText.Text = "📢 " + content;
+                    AnnouncementBar.Visibility = Visibility.Visible;
+                    _currentAnnouncement = content;
+                }
+                else
+                {
+                    AnnouncementBar.Visibility = Visibility.Collapsed;
+                    _currentAnnouncement = "";
+                }
+            });
+        }
+        catch { }
+    }
+
+    private void Socket_GroupAnnouncementUpdated(int groupId)
+    {
+        if (_nav?.Mode == "group" && groupId == _nav.Id)
+            DispatcherQueue.TryEnqueue(() => _ = LoadAnnouncementAsync());
+    }
+
+    private async void AnnouncementManage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_nav?.Mode != "group") return;
+        var me = SettingsService.Instance.Me;
+        var isOwner = me != null && Members.Any(x => x.Id == me.Id && x.Role == "owner");
+        var box = new TextBox
+        {
+            Text = _currentAnnouncement,
+            PlaceholderText = "输入公告内容（1-2000 字）",
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 100,
+            MaxLength = 2000
+        };
+        if (!isOwner)
+        {
+            var view = new ContentDialog
+            {
+                Title = "群公告",
+                Content = box,
+                CloseButtonText = "关闭",
+                XamlRoot = XamlRoot
+            };
+            await view.ShowAsync();
+            return;
+        }
+        var dialog = new ContentDialog
+        {
+            Title = "编辑群公告",
+            Content = box,
+            PrimaryButtonText = "保存",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        var content = box.Text.Trim();
+        if (string.IsNullOrEmpty(content)) return;
+        try
+        {
+            await _api.PostAsync($"/groups/{_nav.Id}/announcement", new { content });
+            await LoadAnnouncementAsync();
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("发布失败", ex.Message);
+        }
+    }
+
+    // ==================== 禁言 / 踢人 ====================
+
+    private async void MemberMute_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem mi || mi.Tag is not GroupMemberItem m || _nav?.Mode != "group") return;
+        var box = new NumberBox
+        {
+            Header = "禁言时长（分钟，1-1440）",
+            Minimum = 1,
+            Maximum = 1440,
+            Value = 10,
+            Width = 220
+        };
+        var dialog = new ContentDialog
+        {
+            Title = $"禁言 {m.Username}",
+            Content = box,
+            PrimaryButtonText = "禁言",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        try
+        {
+            await _api.PostAsync($"/groups/{_nav.Id}/mute", new { userId = m.Id, durationMinutes = (int)box.Value });
+            await LoadMembersAsync();
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("操作失败", ex.Message);
+        }
+    }
+
+    private async void MemberUnmute_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem mi || mi.Tag is not GroupMemberItem m || _nav?.Mode != "group") return;
+        try
+        {
+            await _api.PostAsync($"/groups/{_nav.Id}/unmute", new { userId = m.Id });
+            await LoadMembersAsync();
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("操作失败", ex.Message);
+        }
+    }
+
+    private async void MemberKick_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem mi || mi.Tag is not GroupMemberItem m || _nav?.Mode != "group") return;
+        var confirm = new ContentDialog
+        {
+            Title = "移出群聊",
+            Content = $"确定将「{m.Username}」移出本群吗？",
+            PrimaryButtonText = "移出",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+        try
+        {
+            await _api.PostAsync($"/groups/{_nav.Id}/kick", new { userId = m.Id });
+            await LoadMembersAsync();
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("操作失败", ex.Message);
+        }
+    }
+
+    private void GroupManage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_nav?.Mode != "group" || sender is not FrameworkElement fe) return;
+        var gid = _nav.Id;
+        var flyout = new MenuFlyout();
+        var muteAll = new MenuFlyoutItem { Text = "全体禁言…" };
+        muteAll.Click += async (_, _) => await MuteAllAsync(gid);
+        var unmuteAll = new MenuFlyoutItem { Text = "解除全体禁言" };
+        unmuteAll.Click += async (_, _) =>
+        {
+            try { await _api.PostAsync($"/groups/{gid}/unmute-all"); }
+            catch (ApiException ex) { await ShowDialogAsync("操作失败", ex.Message); }
+        };
+        flyout.Items.Add(muteAll);
+        flyout.Items.Add(unmuteAll);
+        flyout.ShowAt(fe);
+    }
+
+    private async Task MuteAllAsync(int gid)
+    {
+        var box = new NumberBox
+        {
+            Header = "时长（分钟，留 0 表示持续到手动解除）",
+            Minimum = 0,
+            Maximum = 1440,
+            Value = 10,
+            Width = 240
+        };
+        var dialog = new ContentDialog
+        {
+            Title = "全体禁言",
+            Content = box,
+            PrimaryButtonText = "禁言",
+            CloseButtonText = "取消",
+            XamlRoot = XamlRoot
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        try
+        {
+            await _api.PostAsync($"/groups/{gid}/mute-all", new { durationMinutes = (int)box.Value });
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("操作失败", ex.Message);
+        }
+    }
+
+    // ==================== 群文件 ====================
+
+    private async void GroupFiles_Click(object sender, RoutedEventArgs e)
+    {
+        if (_nav?.Mode != "group") return;
+        var gid = _nav.Id;
+        var list = new ListView
+        {
+            SelectionMode = ListViewSelectionMode.None,
+            IsItemClickEnabled = true,
+            MaxHeight = 360
+        };
+        list.ItemTemplate = (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<DataTemplate xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">" +
+            "<StackPanel Padding=\"0,6\" Spacing=\"2\">" +
+            "<StackPanel Orientation=\"Horizontal\" Spacing=\"10\">" +
+            "<TextBlock Text=\"{Binding Filename}\" FontSize=\"14\" MaxWidth=\"200\" TextTrimming=\"CharacterEllipsis\"/>" +
+            "<TextBlock Text=\"{Binding SizeText}\" FontSize=\"12\" Foreground=\"Gray\" VerticalAlignment=\"Center\"/>" +
+            "</StackPanel>" +
+            "<TextBlock FontSize=\"11\" Foreground=\"Gray\"><Run Text=\"{Binding UploaderName}\"/><Run Text=\" · \"/><Run Text=\"{Binding CreatedAt}\"/></TextBlock>" +
+            "</StackPanel></DataTemplate>");
+        list.ItemClick += async (s, args) =>
+        {
+            if (args.ClickedItem is GroupFileRow f) await DownloadGroupFileAsync(f);
+        };
+
+        var uploadBtn = new Button
+        {
+            Content = "上传文件",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        uploadBtn.Click += async (_, _) => await UploadGroupFileAsync(gid, list);
+
+        var panel = new StackPanel { Spacing = 4 };
+        panel.Children.Add(uploadBtn);
+        panel.Children.Add(list);
+
+        var dialog = new ContentDialog
+        {
+            Title = $"群文件（{_nav.Name}）",
+            Content = panel,
+            CloseButtonText = "关闭",
+            XamlRoot = XamlRoot
+        };
+        await RefreshGroupFilesAsync(gid, list);
+        await dialog.ShowAsync();
+    }
+
+    private async Task RefreshGroupFilesAsync(int gid, ListView list)
+    {
+        try
+        {
+            var res = await _api.GetAsync($"/groups/{gid}/files");
+            list.ItemsSource = res.GetProperty("files").EnumerateArray().Select(f => new GroupFileRow
+            {
+                GroupFileId = f.GetProperty("group_file_id").GetInt32(),
+                FileId = f.GetProperty("file_id").GetInt64(),
+                Filename = f.GetProperty("filename").GetString() ?? "",
+                SizeText = FormatSize(f.GetProperty("size").GetInt64()),
+                UploaderName = f.GetProperty("uploader_name").GetString() ?? "",
+                CreatedAt = f.GetProperty("created_at").GetString() ?? ""
+            }).ToList();
+        }
+        catch { }
+    }
+
+    private async Task UploadGroupFileAsync(int gid, ListView list)
+    {
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.Downloads };
+        picker.FileTypeFilter.Add("*");
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainAppWindow);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        var file = await picker.PickSingleFileAsync();
+        if (file == null) return;
+        try
+        {
+            var fileId = await _files.UploadAsync(file.Path, new Progress<(long, long)>());
+            await _api.PostAsync($"/groups/{gid}/files", new { fileId });
+            await RefreshGroupFilesAsync(gid, list);
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("上传失败", ex.Message);
+        }
+    }
+
+    private async Task DownloadGroupFileAsync(GroupFileRow f)
+    {
+        try
+        {
+            var info = await _api.GetAsync($"/files/{f.FileId}/info");
+            var file = info.GetProperty("file");
+            var filename = file.TryGetProperty("filename", out var fn) ? fn.GetString() ?? f.Filename : f.Filename;
+            var (path, _) = await _files.DownloadAsync(f.FileId, filename);
+            await ShowDialogAsync("下载完成", $"已保存到：\n{path}");
+        }
+        catch (Exception ex)
+        {
+            await ShowDialogAsync("下载失败", ex.Message);
+        }
+    }
+
+    private void Socket_GroupFileUpdated(int groupId)
+    {
+        // 群文件列表为打开时实时拉取，此处静默；如需提示可在此弹窗
+    }
+
+    // ==================== 被移出群聊 / Socket 错误 ====================
+
+    private void Socket_GroupKicked(int groupId, string name)
+    {
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "已被移出群聊",
+                Content = $"你已被移出群聊「{name}」",
+                CloseButtonText = "好的",
+                XamlRoot = XamlRoot
+            };
+            await dialog.ShowAsync();
+            if (_nav != null && _nav.Mode == "group" && _nav.Id == groupId)
+                MainWindow.Current?.Navigate(typeof(GroupsPage));
+        });
+    }
+
+    private void Socket_SocketError(string message)
+    {
+        DispatcherQueue.TryEnqueue(async () => await ShowDialogAsync("提示", message));
+    }
+
+    // ==================== 断线重连补拉 ====================
+
+    private void Socket_Reconnected()
+    {
+        DispatcherQueue.TryEnqueue(() => _ = LoadSinceAsync());
+    }
+
+    private async Task LoadSinceAsync()
+    {
+        if (_nav == null) return;
+        try
+        {
+            var url = $"/messages/since?type={_nav.Mode}&peerId={_nav.Id}&afterId={_lastMsgId}";
+            var res = await _api.GetAsync(url);
+            var arr = res.GetProperty("messages").EnumerateArray().ToList();
+            if (arr.Count == 0) return;
+            var parsed = arr.Select(x => ParseHistoryItem(x))
+                .Where(x => x.MsgId > 0 && !Messages.Any(m => m.MsgId == x.MsgId)).ToList();
+            foreach (var m in parsed)
+            {
+                Messages.Add(m);
+                if (m.MsgId > _lastMsgId) _lastMsgId = m.MsgId;
+            }
+            if (parsed.Count > 0) MsgList.ScrollIntoView(Messages[Messages.Count - 1]);
+            await ClearUnreadAsync();
+        }
+        catch { }
+    }
+
+    // ==================== 落库回执 ack ====================
+
+    private void Socket_MessageAcked(string clientId, long msgId)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var m = Messages.FirstOrDefault(x => x.ClientId == clientId);
+            if (m != null) m.MsgId = msgId;
+            if (msgId > _lastMsgId) _lastMsgId = msgId;
+        });
+    }
+
+    // ==================== 消息搜索 ====================
+
+    private async void Search_Click(object sender, RoutedEventArgs e)
+    {
+        if (_nav == null) return;
+        var box = new TextBox { PlaceholderText = "输入关键词，搜索本会话聊天记录", MinWidth = 260 };
+        var list = new ListView
+        {
+            SelectionMode = ListViewSelectionMode.None,
+            IsItemClickEnabled = true,
+            MaxHeight = 300,
+            Visibility = Visibility.Collapsed
+        };
+        list.ItemTemplate = (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<DataTemplate xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">" +
+            "<StackPanel Padding=\"0,4\" Spacing=\"2\">" +
+            "<TextBlock Text=\"{Binding FromName}\" FontSize=\"12\" Foreground=\"Gray\"/>" +
+            "<TextBlock Text=\"{Binding Content}\" FontSize=\"14\" TextTrimming=\"CharacterEllipsis\"/>" +
+            "</StackPanel></DataTemplate>");
+        ContentDialog dialog = null!;
+        list.ItemClick += async (s, args) =>
+        {
+            if (args.ClickedItem is ChatItem hit)
+            {
+                dialog?.Hide();
+                await LocateMessageAsync(hit.MsgId);
+            }
+        };
+        box.KeyDown += async (_, k) =>
+        {
+            if (k.Key == Windows.System.VirtualKey.Enter) await RunSearchAsync(box, list);
+        };
+        var panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(box);
+        panel.Children.Add(list);
+        dialog = new ContentDialog
+        {
+            Title = "搜索聊天记录",
+            Content = panel,
+            PrimaryButtonText = "搜索",
+            CloseButtonText = "取消",
+            XamlRoot = XamlRoot
+        };
+        dialog.PrimaryButtonClick += async (_, _) => await RunSearchAsync(box, list);
+        await dialog.ShowAsync();
+    }
+
+    private async Task RunSearchAsync(TextBox box, ListView list)
+    {
+        if (_nav == null) return;
+        var q = box.Text.Trim();
+        if (string.IsNullOrEmpty(q)) return;
+        try
+        {
+            var url = $"/messages/search?q={Uri.EscapeDataString(q)}&type={_nav.Mode}&peerId={_nav.Id}";
+            var res = await _api.GetAsync(url);
+            var items = res.GetProperty("messages").EnumerateArray()
+                .Select(x => ParseHistoryItem(x))
+                .Where(x => x.Status == "normal")
+                .ToList();
+            list.ItemsSource = items;
+            list.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (items.Count == 0) await ShowDialogAsync("搜索结果", "未找到包含该关键词的消息");
+        }
+        catch (ApiException ex)
+        {
+            await ShowDialogAsync("搜索失败", ex.Message);
+        }
+    }
+
+    // 跳转定位：已加载直接滚动；更早的历史向前翻页加载直到命中
+    private async Task LocateMessageAsync(long msgId)
+    {
+        var existing = Messages.FirstOrDefault(x => x.MsgId == msgId);
+        if (existing != null)
+        {
+            MsgList.ScrollIntoView(existing);
+            return;
+        }
+        int guard = 0;
+        while (_hasMore && guard < 20)
+        {
+            guard++;
+            var beforeId = Messages.Count > 0 ? Messages[0].MsgId : 0;
+            var url = $"/messages/history?type={_nav!.Mode}&peerId={_nav.Id}&limit=50";
+            if (beforeId > 0) url += $"&beforeId={beforeId}";
+            try
+            {
+                var res = await _api.GetAsync(url);
+                var parsed = res.GetProperty("messages").EnumerateArray()
+                    .Select(x => ParseHistoryItem(x)).ToList();
+                for (int i = parsed.Count - 1; i >= 0; i--) Messages.Insert(0, parsed[i]);
+                if (parsed.Count == 0) { _hasMore = false; break; }
+                if (parsed.Count < 50) _hasMore = false;
+                var hit = Messages.FirstOrDefault(x => x.MsgId == msgId);
+                if (hit != null)
+                {
+                    MsgList.ScrollIntoView(hit);
+                    return;
+                }
+            }
+            catch { break; }
+        }
+        await ShowDialogAsync("定位失败", "未能在历史消息中找到该消息");
+    }
+
+    private sealed class GroupFileRow
+    {
+        public int GroupFileId { get; set; }
+        public long FileId { get; set; }
+        public string Filename { get; set; } = "";
+        public string SizeText { get; set; } = "";
+        public string UploaderName { get; set; } = "";
+        public string CreatedAt { get; set; } = "";
     }
 }

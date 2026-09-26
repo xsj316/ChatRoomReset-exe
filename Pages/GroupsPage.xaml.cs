@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using ChatRoomReset.Services;
@@ -15,6 +16,10 @@ public class GroupItem
     public string Initial => string.IsNullOrEmpty(Name) ? "?" : Name.Substring(0, 1).ToUpper();
     public string InviteCode { get; set; } = "";
     public string OwnerName { get; set; } = "";
+    // 未读角标
+    public int Unread { get; set; }
+    public string UnreadText => Unread > 0 ? (Unread > 99 ? "99+" : Unread.ToString()) : "";
+    public Visibility UnreadVisible => Unread > 0 ? Visibility.Visible : Visibility.Collapsed;
 }
 
 public sealed partial class GroupsPage : Page
@@ -31,7 +36,21 @@ public sealed partial class GroupsPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        App.Socket.GroupMessageReceived -= Socket_GroupMessageReceived;
+        App.Socket.GroupMessageReceived += Socket_GroupMessageReceived;
         _ = LoadGroupsAsync();
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        base.OnNavigatedFrom(e);
+        App.Socket.GroupMessageReceived -= Socket_GroupMessageReceived;
+    }
+
+    private void Socket_GroupMessageReceived(int groupId, int fromId, string content, long fileId, long msgId, int replyTo, string fromName)
+    {
+        // 收到新群消息 → 刷新未读角标
+        DispatcherQueue.TryEnqueue(() => _ = LoadUnreadAsync());
     }
 
     private async Task LoadGroupsAsync()
@@ -51,6 +70,28 @@ public sealed partial class GroupsPage : Page
                 });
             }
             EmptyPanel.Visibility = Groups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        catch { }
+        await LoadUnreadAsync();
+    }
+
+    /// <summary>拉取群未读数，写入群列表角标。</summary>
+    private async Task LoadUnreadAsync()
+    {
+        try
+        {
+            var res = await _api.GetAsync("/messages/unread");
+            var unreads = new Dictionary<int, int>();
+            foreach (var r in res.GetProperty("group").EnumerateArray())
+            {
+                var peerId = r.GetProperty("groupId").GetInt32();
+                var n = r.GetProperty("unread").GetInt32();
+                unreads[peerId] = n;
+            }
+            foreach (var g in Groups)
+            {
+                g.Unread = unreads.TryGetValue(g.Id, out var n) ? n : 0;
+            }
         }
         catch { }
     }

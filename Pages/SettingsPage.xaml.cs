@@ -26,7 +26,13 @@ public sealed partial class SettingsPage : Page
 
         var s = SettingsService.Instance;
         ServerBox.Text = s.ServerBase;
-        ThemePicker.SelectedIndex = s.Theme == "Dark" ? 1 : 0;
+        ThemePicker.SelectedIndex = s.Theme switch
+        {
+            "Light" => 0,
+            "Dark" => 1,
+            _ => 2   // System
+        };
+        AutoUpdateSwitch.IsOn = s.AutoUpdate;
         UpdateAccountText();
     }
 
@@ -72,13 +78,56 @@ public sealed partial class SettingsPage : Page
 
     private void SaveThemeBtn_Click(object sender, RoutedEventArgs e)
     {
-        var theme = ThemePicker.SelectedIndex == 1 ? "Dark" : "Light";
+        var theme = ThemePicker.SelectedIndex switch
+        {
+            0 => "Light",
+            1 => "Dark",
+            _ => "System"
+        };
         SettingsService.Instance.Theme = theme;
         SettingsService.Instance.Save();
 
         if (MainWindow.Current?.Content is FrameworkElement root)
         {
-            root.RequestedTheme = theme == "Dark" ? ElementTheme.Dark : ElementTheme.Light;
+            root.RequestedTheme = theme switch
+            {
+                "Dark" => ElementTheme.Dark,
+                "Light" => ElementTheme.Light,
+                _ => ElementTheme.Default
+            };
+        }
+    }
+
+    private void AutoUpdateSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        SettingsService.Instance.AutoUpdate = AutoUpdateSwitch.IsOn;
+        SettingsService.Instance.Save();
+    }
+
+    private async void CheckUpdateBtn_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpdateBtn.IsEnabled = false;
+        UpdateStatusText.Text = "正在检查更新…";
+        var info = await UpdateService.CheckLatestAsync();
+        CheckUpdateBtn.IsEnabled = true;
+
+        if (info == null || string.IsNullOrEmpty(info.TagName))
+        {
+            UpdateStatusText.Text = "检查失败或已是最新版本（当前 beta 1.0.0）";
+            return;
+        }
+        UpdateStatusText.Text = $"发现 {info.TagName}（{info.Name}）";
+        var dialog = new ContentDialog
+        {
+            Title = "发现新版本",
+            Content = $"Chat Room 重置版 {info.TagName} 已发布（{info.Name}）。是否前往下载页？",
+            PrimaryButtonText = "前往下载",
+            CloseButtonText = "稍后",
+            XamlRoot = XamlRoot
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrEmpty(info.HtmlUrl))
+        {
+            _ = Windows.System.Launcher.LaunchUriAsync(new Uri(info.HtmlUrl));
         }
     }
 
